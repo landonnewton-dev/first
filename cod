@@ -1,3 +1,4 @@
+python main.py
 3d-shooter/
 ├── project.godot
 ├── player.tscn
