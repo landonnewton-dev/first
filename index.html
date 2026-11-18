@@ -1,0 +1,1206 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>COMBAT MANATEES</title>
+
+<style>
+*{box-sizing:border-box}
+body{margin:0;overflow:hidden;background:#111;font-family:Arial,sans-serif}
+canvas{display:block}
+
+#hud{
+ position:absolute;inset:0;color:white;
+ pointer-events:none;padding:20px;
+}
+.panel{
+ background:rgba(10,19,15,.88);
+ border:1px solid #65775d;
+ padding:12px 17px;
+}
+#top{position:absolute;top:18px;left:18px;display:flex;gap:10px}
+#wave{position:absolute;top:20px;left:50%;transform:translateX(-50%);letter-spacing:3px}
+#healthBox{position:absolute;bottom:25px;left:20px;width:235px}
+#healthBar{height:13px;background:#283329;margin-top:8px}
+#healthFill{height:100%;width:100%;background:#71d47a}
+#ammo{position:absolute;bottom:25px;right:20px;font-size:30px}
+#ammo small{font-size:13px;color:#b9c6b5}
+#crosshair{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:27px}
+#hitmarker{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:35px;opacity:0}
+#message{position:absolute;top:60%;left:50%;transform:translateX(-50%);font-size:20px;color:#e8ce8a}
+
+#screen{
+ position:absolute;inset:0;z-index:5;
+ background:linear-gradient(135deg,#101c16,#28382d);
+ display:flex;align-items:center;justify-content:center;
+ flex-direction:column;color:white;text-align:center;
+}
+h1{font-size:clamp(38px,7vw,72px);letter-spacing:5px;color:#d5b66e;margin:10px}
+h2{letter-spacing:3px;color:#aab99e}
+button{
+ background:#b49754;border:1px solid #e0c982;
+ padding:16px 45px;font-size:20px;font-weight:bold;
+ cursor:pointer;margin:18px;
+}
+button:hover{background:#e0c982}
+#instructions{color:#b6c2b0;line-height:2}
+</style>
+</head>
+
+<body>
+
+<div id="screen">
+ <p>CAMDEN STUDIOS PRESENTS</p>
+ <h1>COMBAT MANATEES</h1>
+ <h2>TACTICAL ARENA</h2>
+ <p>Survive the robot invasion.</p>
+ <button id="start">DEPLOY</button>
+ <div id="instructions">
+ WASD - MOVE | MOUSE - LOOK<br>
+ LEFT CLICK - FIRE | R - RELOAD<br>
+ SPACE - JUMP | E - OPEN/CLOSE DOOR<br>ESC - RELEASE MOUSE
+ </div>
+</div>
+
+<div id="hud">
+ <div id="top">
+  <div class="panel">KILLS: <span id="kills">0</span></div>
+  <div class="panel">STATUS: <span style="color:#75df84">ACTIVE</span></div>
+ </div>
+
+ <div id="wave">WAVE 1</div>
+ <div id="crosshair">+</div>
+ <div id="hitmarker">×</div>
+ <div id="message"></div>
+
+ <div id="healthBox" class="panel">
+  VITAL SIGNS
+  <div id="health">100 / 100</div>
+  <div id="healthBar"><div id="healthFill"></div></div>
+ </div>
+
+ <div id="ammo" class="panel">
+  30 <small>/ 120<br>ENERGY CELLS</small>
+ </div>
+</div>
+
+<script type="importmap">
+{
+ "imports":{
+  "three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js"
+ }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+
+// =====================================
+// COMBAT MANATEES
+// COMPLETE GAME
+// =====================================
+
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x899b9d);
+scene.fog=new THREE.Fog(0x899b9d,40,110);
+
+const camera=new THREE.PerspectiveCamera(
+ 75,innerWidth/innerHeight,.1,160
+);
+
+const renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(innerWidth,innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.shadowMap.enabled=true;
+renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+renderer.outputColorSpace=THREE.SRGBColorSpace;
+renderer.toneMapping=THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure=1.15;
+document.body.appendChild(renderer.domElement);
+
+// =====================================
+// LIGHTING
+// =====================================
+
+scene.add(new THREE.HemisphereLight(0xdde9dc,0x414c3b,2));
+
+const sun=new THREE.DirectionalLight(0xffe6c4,2.5);
+sun.position.set(-25,45,20);
+sun.castShadow=true;
+sun.shadow.mapSize.set(2048,2048);
+sun.shadow.camera.left=-65;
+sun.shadow.camera.right=65;
+sun.shadow.camera.top=65;
+sun.shadow.camera.bottom=-65;
+scene.add(sun);
+
+// =====================================
+// MATERIALS
+// =====================================
+
+function material(c,r=.85){
+ return new THREE.MeshStandardMaterial({
+  color:c,roughness:r
+ });
+}
+
+const concrete=material(0x626c68);
+const dark=material(0x343c39);
+const glass=material(0x76999d,.3);
+const sand=material(0x938367);
+const metal=material(0x46534c,.5);
+const roadMat=material(0x343a39);
+const grassMat=material(0x536a4c);
+
+// =====================================
+// WORLD
+// =====================================
+
+const ground=new THREE.Mesh(
+ new THREE.PlaneGeometry(120,120),grassMat
+);
+ground.rotation.x=-Math.PI/2;
+ground.receiveShadow=true;
+scene.add(ground);
+
+const obstacles=[];
+
+function obstacle(x,z,w,h,d,mat,cover=false,centerY=h/2){
+ const mesh=new THREE.Mesh(
+  new THREE.BoxGeometry(w,h,d),mat
+ );
+
+ mesh.position.set(x,centerY,z);
+ mesh.castShadow=true;
+ mesh.receiveShadow=true;
+ scene.add(mesh);
+
+ obstacles.push({
+  mesh,x,z,halfW:w/2,halfD:d/2
+ });
+
+ return mesh;
+}
+
+// ROADS
+
+function road(x,z,w,d){
+ const m=new THREE.Mesh(
+  new THREE.PlaneGeometry(w,d),roadMat
+ );
+ m.rotation.x=-Math.PI/2;
+ m.position.set(x,.015,z);
+ scene.add(m);
+}
+
+road(0,0,12,120);
+road(0,0,120,12);
+
+// ROAD MARKINGS
+
+for(let i=-50;i<55;i+=8){
+ const line=new THREE.Mesh(
+  new THREE.BoxGeometry(.18,.03,3),
+  material(0xd8c99b)
+ );
+ line.position.set(0,.04,i);
+ scene.add(line);
+}
+
+// BUILDINGS - ENTERABLE INTERIORS WITH INTERACTIVE DOORS
+
+const doors=[];
+
+function building(x,z,w,h,d){
+ const wall=.6;
+ const doorWidth=Math.min(2.6,w*.32);
+ const doorHeight=2.55;
+ const frontZ=z+d/2;
+
+ // Solid side and back walls
+ obstacle(x-w/2+wall/2,z,wall,h,d,concrete);
+ obstacle(x+w/2-wall/2,z,wall,h,d,concrete);
+ obstacle(x,z-d/2+wall/2,w,h,wall,concrete);
+
+ // Front wall is split into two sections, leaving a doorway
+ const sideWidth=(w-doorWidth)/2;
+ obstacle(x-doorWidth/2-sideWidth/2,frontZ,
+  sideWidth,h,wall,concrete);
+ obstacle(x+doorWidth/2+sideWidth/2,frontZ,
+  sideWidth,h,wall,concrete);
+
+ // Front wall section above the doorway (visual only)
+ const lintel=new THREE.Mesh(
+  new THREE.BoxGeometry(doorWidth,.45,wall),
+  concrete
+ );
+ lintel.position.set(x,doorHeight+.225,frontZ);
+ lintel.castShadow=true;
+ lintel.receiveShadow=true;
+ scene.add(lintel);
+
+ // Interior floor
+ const floor=new THREE.Mesh(
+  new THREE.PlaneGeometry(w-wall*2,d-wall*2),
+  material(0x77766b)
+ );
+ floor.rotation.x=-Math.PI/2;
+ floor.position.set(x,.035,z);
+ floor.receiveShadow=true;
+ scene.add(floor);
+
+ // Roof stays visible from outside but does not block the interior
+ const roof=new THREE.Mesh(
+  new THREE.BoxGeometry(w+.4,.4,d+.4),dark
+ );
+ roof.position.set(x,h+.15,z);
+ roof.castShadow=true;
+ roof.receiveShadow=true;
+ scene.add(roof);
+
+ // Windows on the front and back walls
+ for(const side of [-1,1]){
+  for(let i=-1;i<=1;i++){
+   const win=new THREE.Mesh(
+    new THREE.BoxGeometry(w*.19,1.2,.07),glass
+   );
+   win.position.set(
+    x+i*w*.28,
+    Math.min(h*.65,h-1.5),
+    z+side*(d/2+.05)
+   );
+   scene.add(win);
+  }
+ }
+
+ // Door frame around the open entrance
+ const frameMat=material(0x292f2c);
+ for(const side of [-1,1]){
+  const post=new THREE.Mesh(
+   new THREE.BoxGeometry(.16,doorHeight,.18),frameMat
+  );
+  post.position.set(x+side*(doorWidth/2),doorHeight/2,frontZ-.08);
+  post.castShadow=true;
+  scene.add(post);
+ }
+ const topFrame=new THREE.Mesh(
+  new THREE.BoxGeometry(doorWidth+.16,.16,.18),frameMat
+ );
+ topFrame.position.set(x,doorHeight,frontZ-.08);
+ scene.add(topFrame);
+
+ // Hinged door: press E nearby to open or close it
+ const hingeX=x-doorWidth/2+.06;
+ const hingeZ=frontZ-.38;
+ const doorPivot=new THREE.Group();
+ doorPivot.position.set(hingeX,0,hingeZ);
+ scene.add(doorPivot);
+
+ const door=new THREE.Mesh(
+  new THREE.BoxGeometry(.95,2.25,.12),dark
+ );
+ door.position.set(.475,1.12,0);
+ door.castShadow=true;
+ door.receiveShadow=true;
+ doorPivot.add(door);
+
+ const doorCollider={
+  mesh:door,
+  x:hingeX+.475,
+  z:hingeZ,
+  halfW:.49,
+  halfD:.16,
+  isDoor:true,
+  pivot:doorPivot,
+  hingeX,
+  hingeZ,
+  open:false,
+  angle:0,
+  targetAngle:0
+ };
+ obstacles.push(doorCollider);
+ doors.push(doorCollider);
+
+ // Warm light and a few interior details
+ const insideLight=new THREE.PointLight(0xffd49a,.65,Math.max(w,d)*1.2);
+ insideLight.position.set(x,h*.72,z);
+ scene.add(insideLight);
+
+ const ceilingLamp=new THREE.Mesh(
+  new THREE.BoxGeometry(1.1,.08,.35),
+  new THREE.MeshBasicMaterial({color:0xffe0a8})
+ );
+ ceilingLamp.position.set(x,h-.35,z);
+ scene.add(ceilingLamp);
+
+ // Small interior crates placed away from the doorway
+ const interiorCrate=new THREE.Mesh(
+  new THREE.BoxGeometry(1.1,1.1,1.1),sand
+ );
+ interiorCrate.position.set(x+w*.25,.55,z-d*.22);
+ interiorCrate.castShadow=true;
+ interiorCrate.receiveShadow=true;
+ scene.add(interiorCrate);
+ obstacles.push({
+  mesh:interiorCrate,
+  x:x+w*.25,z:z-d*.22,
+  halfW:.55,halfD:.55
+ });
+}
+
+building(-20,-18,12,9,12);
+building(20,-19,12,10,12);
+building(-25,20,13,8,11);
+building(24,20,13,9,12);
+building(0,-40,18,11,9);
+building(-42,-5,9,8,15);
+building(42,4,9,9,15);
+
+// WALLS AND COVER
+
+for(let i=0;i<20;i++){
+ let x=Math.random()*55-27;
+ let z=Math.random()*55-27;
+
+ if(Math.abs(x)<8&&Math.abs(z)<8)continue;
+
+ obstacle(x,z,3,1.5,1.3,sand,true);
+}
+
+// =====================================
+// VEHICLES
+// =====================================
+
+function vehicle(x,z){
+ const body=new THREE.Mesh(
+  new THREE.BoxGeometry(4,1.2,2.3),
+  material(0x58654d)
+ );
+ body.position.set(x,.9,z);
+ body.castShadow=true;
+ scene.add(body);
+
+ const top=new THREE.Mesh(
+  new THREE.BoxGeometry(2.2,.65,1.8),metal
+ );
+ top.position.set(x,1.75,z);
+ scene.add(top);
+
+ for(const side of [-1,1]){
+  for(const front of [-1,1]){
+   const wheel=new THREE.Mesh(
+    new THREE.CylinderGeometry(.48,.48,.28,12),
+    material(0x202322)
+   );
+   wheel.rotation.z=Math.PI/2;
+   wheel.position.set(x+side*2,.55,z+front*.75);
+   scene.add(wheel);
+  }
+ }
+
+ obstacles.push({
+  mesh:body,x,z,halfW:2,halfD:1.15
+ });
+}
+
+vehicle(-12,8);
+vehicle(14,-8);
+
+// =====================================
+// ENVIRONMENT DETAILS
+// =====================================
+
+// Crates
+
+for(let i=0;i<15;i++){
+ const x=Math.random()*60-30;
+ const z=Math.random()*60-30;
+
+ if(Math.abs(x)<7&&Math.abs(z)<7)continue;
+
+ obstacle(x,z,1.4,1.4,1.4,sand);
+}
+
+// Streetlights
+
+for(let i=0;i<8;i++){
+ const x=i%2===0?-8:8;
+ const z=-35+Math.floor(i/2)*22;
+
+ const pole=new THREE.Mesh(
+  new THREE.CylinderGeometry(.09,.12,6,8),metal
+ );
+ pole.position.set(x,3,z);
+ scene.add(pole);
+
+ const bulb=new THREE.PointLight(0xffd9a0,.8,14);
+ bulb.position.set(x,6,z);
+ scene.add(bulb);
+}
+
+// Rocks
+
+for(let i=0;i<30;i++){
+ const rock=new THREE.Mesh(
+  new THREE.DodecahedronGeometry(.3+Math.random()*.5),
+  material(0x656b5c)
+ );
+ rock.position.set(
+  Math.random()*110-55,.25,
+  Math.random()*110-55
+ );
+ rock.rotation.set(Math.random(),Math.random(),Math.random());
+ scene.add(rock);
+}
+
+// =====================================
+// PLAYER
+// =====================================
+
+const player={
+ x:0,y:2,z:0,
+ health:100,
+ ammo:30,
+ reserve:120,
+ kills:0,
+ wave:1,
+ yaw:0,
+ pitch:0,
+ speed:8,
+ radius:.45,
+ jumping:false,
+ jumpVelocity:0,
+ alive:true
+};
+
+camera.position.set(0,2,0);
+
+// =====================================
+// FIRST PERSON WEAPON
+// =====================================
+
+const weapon=new THREE.Group();
+camera.add(weapon);
+scene.add(camera);
+
+const weaponBody=new THREE.Mesh(
+ new THREE.BoxGeometry(.23,.22,.85),
+ material(0x343d3a,.4)
+);
+weaponBody.position.set(.38,-.34,-.68);
+weapon.add(weaponBody);
+
+const barrel=new THREE.Mesh(
+ new THREE.CylinderGeometry(.065,.065,.6,12),
+ material(0x222a27,.4)
+);
+barrel.rotation.x=Math.PI/2;
+barrel.position.set(.38,-.34,-1.25);
+weapon.add(barrel);
+
+const glow=new THREE.Mesh(
+ new THREE.BoxGeometry(.08,.06,.18),
+ new THREE.MeshBasicMaterial({color:0x69d8b2})
+);
+glow.position.set(.38,-.3,-.55);
+weapon.add(glow);
+
+for(const side of [-1,1]){
+ const arm=new THREE.Mesh(
+  new THREE.BoxGeometry(.16,.16,.48),
+  material(0x78866b)
+ );
+ arm.position.set(side*.29,-.4,-.48);
+ weapon.add(arm);
+}
+
+// =====================================
+// INPUT
+// =====================================
+
+const keys={};
+let locked=false;
+let shooting=false;
+let reloading=false;
+let fireCooldown=0;
+
+document.addEventListener('keydown',e=>{
+ keys[e.code]=true;
+
+ if(e.code==='KeyR')reload();
+ if(e.code==='KeyE'&&!e.repeat)toggleNearbyDoor();
+
+ if(e.code==='Space'&&!player.jumping&&player.alive){
+  player.jumpVelocity=8.5;
+  player.jumping=true;
+ }
+});
+
+document.addEventListener('keyup',e=>{
+ keys[e.code]=false;
+});
+
+document.addEventListener('mousemove',e=>{
+ if(!locked||!player.alive)return;
+
+ player.yaw-=e.movementX*.002;
+ player.pitch-=e.movementY*.002;
+
+ player.pitch=Math.max(-1.4,Math.min(1.4,player.pitch));
+
+ camera.rotation.order='YXZ';
+ camera.rotation.y=player.yaw;
+ camera.rotation.x=player.pitch;
+});
+
+document.addEventListener('pointerlockchange',()=>{
+ locked=document.pointerLockElement===renderer.domElement;
+});
+
+renderer.domElement.addEventListener('click',()=>{
+ if(!player.alive)return;
+
+ if(!locked)renderer.domElement.requestPointerLock();
+ else shoot();
+});
+
+document.addEventListener('mousedown',e=>{
+ if(e.button===0)shooting=true;
+});
+
+document.addEventListener('mouseup',e=>{
+ if(e.button===0)shooting=false;
+});
+
+// =====================================
+// DOOR INTERACTION
+// =====================================
+
+function updateDoorColliders(){
+ for(const door of doors){
+  const a=door.angle;
+  const open=Math.abs(a)>.25;
+  if(open){
+   door.x=door.hingeX+Math.cos(a)*.475;
+   door.z=door.hingeZ-Math.sin(a)*.475;
+   door.halfW=.16;
+   door.halfD=.49;
+  }else{
+   door.x=door.hingeX+.475;
+   door.z=door.hingeZ;
+   door.halfW=.49;
+   door.halfD=.16;
+  }
+ }
+}
+
+function toggleNearbyDoor(){
+ let nearest=null;
+ let nearestDistance=3.5;
+ for(const door of doors){
+  const dx=player.x-door.hingeX;
+  const dz=player.z-door.hingeZ;
+  const distance=Math.hypot(dx,dz);
+  if(distance<nearestDistance){
+   nearest=door;
+   nearestDistance=distance;
+  }
+ }
+ if(!nearest){
+  messageUI.textContent='NO DOOR NEARBY';
+  setTimeout(()=>{if(messageUI.textContent==='NO DOOR NEARBY')messageUI.textContent='';},900);
+  return;
+ }
+ nearest.open=!nearest.open;
+ nearest.targetAngle=nearest.open?Math.PI/2:0;
+ messageUI.textContent=nearest.open?'DOOR OPENING':'DOOR CLOSING';
+ setTimeout(()=>{if(messageUI.textContent==='DOOR OPENING'||messageUI.textContent==='DOOR CLOSING')messageUI.textContent='';},700);
+}
+
+function animateDoors(dt){
+ for(const door of doors){
+  const speed=Math.min(1,dt*5.5);
+  door.angle=THREE.MathUtils.lerp(door.angle,door.targetAngle,speed);
+  door.pivot.rotation.y=door.angle;
+ }
+ updateDoorColliders();
+}
+
+// =====================================
+// COLLISION SYSTEM
+// =====================================
+
+const enemies=[];
+const enemyProjectiles=[];
+
+function collidesAt(x,z,radius=.45,ignore=null){
+ if(x < -58+radius||x>58-radius||
+    z < -58+radius||z>58-radius)return true;
+
+ for(const o of obstacles){
+  const cx=Math.max(o.x-o.halfW,Math.min(x,o.x+o.halfW));
+  const cz=Math.max(o.z-o.halfD,Math.min(z,o.z+o.halfD));
+
+  const dx=x-cx;
+  const dz=z-cz;
+
+  if(dx*dx+dz*dz<radius*radius)return true;
+ }
+
+ for(const e of enemies){
+  if(e===ignore)continue;
+
+  const dx=x-e.mesh.position.x;
+  const dz=z-e.mesh.position.z;
+
+  if(dx*dx+dz*dz<.85*.85)return true;
+ }
+
+ return false;
+}
+
+function moveWithCollision(obj,dx,dz,radius,ignore=null){
+ if(!collidesAt(obj.x+dx,obj.z,radius,ignore))obj.x+=dx;
+ if(!collidesAt(obj.x,obj.z+dz,radius,ignore))obj.z+=dz;
+}
+
+// =====================================
+// SOLDIER MODELS
+// =====================================
+
+function soldier(position,color){
+ const group=new THREE.Group();
+
+ const uniform=material(color);
+ const skin=material(0xa67e62);
+ const helmet=material(0x354c3c);
+ const vest=material(0x525e48);
+ const boots=material(0x222923);
+
+ function part(w,h,d,mat,x,y,z){
+  const mesh=new THREE.Mesh(
+   new THREE.BoxGeometry(w,h,d),mat
+  );
+  mesh.position.set(x,y,z);
+  mesh.castShadow=true;
+  group.add(mesh);
+  return mesh;
+ }
+
+ // Body
+ part(.72,.85,.38,uniform,0,1.1,0);
+ part(.77,.48,.43,vest,0,1.2,.015);
+
+ // Head
+ const head=new THREE.Mesh(
+  new THREE.SphereGeometry(.23,12,10),skin
+ );
+ head.position.y=1.72;
+ group.add(head);
+
+ // Helmet
+ const hat=new THREE.Mesh(
+  new THREE.SphereGeometry(.26,12,8,0,Math.PI*2,0,Math.PI/2),
+  helmet
+ );
+ hat.position.y=1.83;
+ group.add(hat);
+
+ // Backpack
+ part(.42,.56,.2,vest,0,1.22,-.27);
+
+ const legs=[];
+
+ for(const side of [-1,1]){
+  const leg=part(.25,.65,.28,uniform,side*.19,.4,0);
+  legs.push(leg);
+
+  part(.28,.18,.38,boots,side*.19,.1,.05);
+  part(.19,.65,.2,uniform,side*.46,1.12,.05);
+ }
+
+ group.userData.legs=legs;
+ group.position.copy(position);
+
+ return group;
+}
+
+// =====================================
+// ENEMY AI
+// =====================================
+
+function createEnemy(){
+ let x,z,attempts=0;
+
+ do{
+  const angle=Math.random()*Math.PI*2;
+  const distance=20+Math.random()*18;
+
+  x=player.x+Math.sin(angle)*distance;
+  z=player.z+Math.cos(angle)*distance;
+
+  attempts++;
+ }while(collidesAt(x,z,.45)&&attempts<60);
+
+ const colors=[
+  0x7c453b,0x4d5a49,0x77704f,0x424c5a
+ ];
+
+ const mesh=soldier(
+  new THREE.Vector3(x,0,z),
+  colors[Math.floor(Math.random()*colors.length)]
+ );
+
+ scene.add(mesh);
+
+ enemies.push({
+  mesh,
+  health:100,
+  speed:2+Math.random()*1.4,
+  timer:1+Math.random()*2,
+  strafe:Math.random()<.5?-1:1,
+  cooldown:1+Math.random()*2
+ });
+}
+
+function spawnWave(){
+ for(let i=0;i<3+player.wave*2;i++)createEnemy();
+ updateHUD();
+}
+
+// =====================================
+// HUD
+// =====================================
+
+const healthUI=document.getElementById('health');
+const healthFill=document.getElementById('healthFill');
+const ammoUI=document.getElementById('ammo');
+const killsUI=document.getElementById('kills');
+const waveUI=document.getElementById('wave');
+const screen=document.getElementById('screen');
+const messageUI=document.getElementById('message');
+const hitmarker=document.getElementById('hitmarker');
+
+function updateHUD(){
+ healthUI.textContent=player.health+' / 100';
+ healthFill.style.width=player.health+'%';
+ healthFill.style.background=
+  player.health<30?'#df5149':'#71d47a';
+
+ ammoUI.innerHTML=
+  player.ammo+' <small>/ '+player.reserve+'<br>ENERGY CELLS</small>';
+
+ killsUI.textContent=player.kills;
+ waveUI.textContent='WAVE '+player.wave;
+}
+
+// =====================================
+// LINE OF SIGHT
+// =====================================
+
+function clearShot(start,target){
+ const direction=target.clone().sub(start);
+ const distance=direction.length();
+ direction.normalize();
+
+ const ray=new THREE.Raycaster(start,direction,0,distance);
+
+ const hits=ray.intersectObjects(
+  obstacles.map(o=>o.mesh),false
+ );
+
+ return hits.length===0;
+}
+
+// =====================================
+// SHOOTING
+// =====================================
+
+const raycaster=new THREE.Raycaster();
+
+function shoot(){
+ if(!player.alive||reloading||player.ammo<=0)return;
+
+ player.ammo--;
+ updateHUD();
+
+ weapon.position.z=-.12;
+
+ raycaster.setFromCamera(new THREE.Vector2(0,0),camera);
+
+ const targets=[
+  ...enemies.map(e=>e.mesh),
+  ...obstacles.map(o=>o.mesh)
+ ];
+
+ const hits=raycaster.intersectObjects(targets,true);
+
+ if(hits.length){
+  let object=hits[0].object;
+
+  while(object.parent&&!enemies.some(e=>e.mesh===object)){
+   object=object.parent;
+  }
+
+  const enemy=enemies.find(e=>e.mesh===object);
+
+  if(enemy){
+   enemy.health-=35;
+
+   hitmarker.style.opacity=1;
+   setTimeout(()=>hitmarker.style.opacity=0,120);
+
+   if(enemy.health<=0)killEnemy(enemy);
+  }
+ }
+}
+
+// =====================================
+// RELOAD
+// =====================================
+
+function reload(){
+ if(reloading||player.ammo===30||
+    player.reserve<=0||!player.alive)return;
+
+ reloading=true;
+ messageUI.textContent='RELOADING...';
+
+ setTimeout(()=>{
+  const amount=Math.min(30-player.ammo,player.reserve);
+
+  player.ammo+=amount;
+  player.reserve-=amount;
+
+  reloading=false;
+  messageUI.textContent='';
+  updateHUD();
+ },1500);
+}
+
+// =====================================
+// ENEMY PROJECTILES
+// =====================================
+
+function enemyFire(enemy){
+ const start=enemy.mesh.position.clone();
+ start.y+=1.3;
+
+ const target=new THREE.Vector3(
+  player.x+(Math.random()-.5)*2.5,
+  player.y+(Math.random()-.5)*1.5,
+  player.z+(Math.random()-.5)*2.5
+ );
+
+ const direction=target.clone().sub(start).normalize();
+
+ // WALL CHECK BEFORE FIRING
+ if(!clearShot(start,target))return;
+
+ const projectile=new THREE.Mesh(
+  new THREE.SphereGeometry(.13,8,8),
+  new THREE.MeshBasicMaterial({color:0xffa65a})
+ );
+
+ projectile.position.copy(start);
+ scene.add(projectile);
+
+ enemyProjectiles.push({
+  mesh:projectile,direction,life:3
+ });
+}
+
+// =====================================
+// DAMAGE AND GAME OVER
+// =====================================
+
+function damagePlayer(amount){
+ if(!player.alive)return;
+
+ player.health=Math.max(0,player.health-amount);
+ updateHUD();
+
+ if(player.health<=0){
+  player.alive=false;
+  document.exitPointerLock();
+
+  screen.style.display='flex';
+  screen.innerHTML=`
+   <h1>MISSION FAILED</h1>
+   <h2>KILLS: ${player.kills}</h2>
+   <h2>WAVE: ${player.wave}</h2>
+   <button id="restart">REDEPLOY</button>
+  `;
+
+  document.getElementById('restart').onclick=restart;
+ }
+}
+
+// =====================================
+// ENEMY DEFEATED
+// =====================================
+
+function killEnemy(enemy){
+ scene.remove(enemy.mesh);
+ enemies.splice(enemies.indexOf(enemy),1);
+
+ player.kills++;
+ updateHUD();
+
+ if(enemies.length===0&&player.alive){
+  const completed=player.wave;
+  player.wave++;
+
+  screen.style.display='flex';
+  screen.innerHTML=`
+   <h1>WAVE ${completed} CLEARED</h1>
+   <h2>PREPARE FOR NEXT DEPLOYMENT</h2>
+   <button id="continue">NEXT WAVE</button>
+  `;
+
+  document.getElementById('continue').onclick=()=>{
+   screen.style.display='none';
+   spawnWave();
+   renderer.domElement.requestPointerLock();
+  };
+ }
+}
+
+// =====================================
+// PLAYER MOVEMENT
+// =====================================
+
+function movePlayer(dt){
+ const forward=new THREE.Vector3(
+  -Math.sin(player.yaw),0,-Math.cos(player.yaw)
+ );
+
+ const right=new THREE.Vector3(
+  Math.cos(player.yaw),0,-Math.sin(player.yaw)
+ );
+
+ const movement=new THREE.Vector3();
+
+ if(keys.KeyW)movement.add(forward);
+ if(keys.KeyS)movement.sub(forward);
+ if(keys.KeyD)movement.add(right);
+ if(keys.KeyA)movement.sub(right);
+
+ if(movement.length()>0)movement.normalize();
+
+ moveWithCollision(
+  player,
+  movement.x*player.speed*dt,
+  movement.z*player.speed*dt,
+  player.radius
+ );
+
+ if(player.jumping){
+  player.y+=player.jumpVelocity*dt;
+  player.jumpVelocity-=22*dt;
+
+  if(player.y<=2){
+   player.y=2;
+   player.jumpVelocity=0;
+   player.jumping=false;
+  }
+ }
+
+ camera.position.set(player.x,player.y,player.z);
+}
+
+// =====================================
+// ENEMY MOVEMENT
+// =====================================
+
+function updateEnemies(dt){
+ for(const e of enemies){
+  const pos=e.mesh.position;
+
+  const dx=player.x-pos.x;
+  const dz=player.z-pos.z;
+  const distance=Math.sqrt(dx*dx+dz*dz);
+
+  e.mesh.lookAt(player.x,1,player.z);
+
+  e.timer-=dt;
+  e.cooldown-=dt;
+
+  const dir=new THREE.Vector3(dx,0,dz).normalize();
+
+  let mx=0,mz=0;
+
+  if(distance>10){
+   mx=dir.x*e.speed*dt;
+   mz=dir.z*e.speed*dt;
+  }else if(distance>5){
+   mx=dir.z*e.strafe*e.speed*dt;
+   mz=-dir.x*e.strafe*e.speed*dt;
+  }
+
+  const p={x:pos.x,z:pos.z};
+
+  moveWithCollision(p,mx,mz,.45,e);
+
+  pos.x=p.x;
+  pos.z=p.z;
+
+  if(e.timer<=0){
+   e.strafe=Math.random()<.5?-1:1;
+   e.timer=1+Math.random()*2;
+  }
+
+  // Only fire with clear line of sight
+  if(distance<32&&e.cooldown<=0){
+   e.cooldown=1.7+Math.random()*2;
+
+   const target=new THREE.Vector3(
+    player.x,player.y,player.z
+   );
+
+   const start=pos.clone();
+   start.y+=1.3;
+
+   if(clearShot(start,target)){
+    enemyFire(e);
+   }
+  }
+ }
+}
+
+// =====================================
+// PROJECTILE COLLISION
+// =====================================
+
+function updateProjectiles(dt){
+ const wallMeshes=obstacles.map(o=>o.mesh);
+
+ for(let i=enemyProjectiles.length-1;i>=0;i--){
+  const p=enemyProjectiles[i];
+
+  const previous=p.mesh.position.clone();
+  const movement=p.direction.clone().multiplyScalar(15*dt);
+
+  const ray=new THREE.Raycaster(
+   previous,p.direction,0,movement.length()
+  );
+
+  const hits=ray.intersectObjects(wallMeshes,false);
+
+  if(hits.length){
+   scene.remove(p.mesh);
+   enemyProjectiles.splice(i,1);
+   continue;
+  }
+
+  p.mesh.position.add(movement);
+  p.life-=dt;
+
+  if(p.mesh.position.distanceTo(camera.position)<.8){
+   damagePlayer(8);
+   scene.remove(p.mesh);
+   enemyProjectiles.splice(i,1);
+   continue;
+  }
+
+  if(p.life<=0){
+   scene.remove(p.mesh);
+   enemyProjectiles.splice(i,1);
+  }
+ }
+}
+
+// =====================================
+// RESTART
+// =====================================
+
+function restart(){
+ enemies.forEach(e=>scene.remove(e.mesh));
+ enemies.length=0;
+
+ enemyProjectiles.forEach(p=>scene.remove(p.mesh));
+ enemyProjectiles.length=0;
+
+ player.x=0;
+ player.y=2;
+ player.z=0;
+ player.health=100;
+ player.ammo=30;
+ player.reserve=120;
+ player.kills=0;
+ player.wave=1;
+ player.alive=true;
+ player.yaw=0;
+ player.pitch=0;
+ player.jumping=false;
+ player.jumpVelocity=0;
+
+ camera.position.set(0,2,0);
+ camera.rotation.set(0,0,0);
+
+ updateHUD();
+ screen.style.display='none';
+ spawnWave();
+
+ renderer.domElement.requestPointerLock();
+}
+
+// =====================================
+// GAME LOOP
+// =====================================
+
+let lastTime=performance.now();
+
+function animate(){
+ requestAnimationFrame(animate);
+
+ const now=performance.now();
+ const dt=Math.min((now-lastTime)/1000,.05);
+ lastTime=now;
+
+ if(player.alive&&locked){
+  animateDoors(dt);
+  movePlayer(dt);
+  updateEnemies(dt);
+  updateProjectiles(dt);
+
+  fireCooldown-=dt;
+
+  if(shooting&&fireCooldown<=0){
+   shoot();
+   fireCooldown=.15;
+  }
+
+  weapon.position.y=Math.sin(now*.008)*.008;
+  weapon.position.z=THREE.MathUtils.lerp(
+   weapon.position.z,0,.2
+  );
+ }
+
+ renderer.render(scene,camera);
+}
+
+// =====================================
+// START GAME
+// =====================================
+
+document.getElementById('start').onclick=()=>{
+ screen.style.display='none';
+ spawnWave();
+ renderer.domElement.requestPointerLock();
+};
+
+window.addEventListener('resize',()=>{
+ camera.aspect=innerWidth/innerHeight;
+ camera.updateProjectionMatrix();
+ renderer.setSize(innerWidth,innerHeight);
+});
+
+updateDoorColliders();
+updateHUD();
+animate();
+
+</script>
+</body>
+</html>
